@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "helmpad-app",
+      "runtimeExecutable": "C:\\Users\\rschi\\AppData\\Local\\helmpad-venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-u", "-m", "helmpad.server", "--kein-browser"],
+      "port": 8770
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# Laufzeitdaten: hochgeladene Helme und Ergebnisse (können eigene, private Modelle enthalten)
+arbeitsdaten/
+ausgabe/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+requirements.installed
+
+# Testreste und lokale Einstellungen
+helmpad/web/_test.stl
+.claude/settings.local.json
+Thumbs.db
+desktop.ini

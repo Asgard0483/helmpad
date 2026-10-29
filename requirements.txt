@@ -1,0 +1,14 @@
+# Getestete Versionen (Python 3.13). Feste Versionen verhindern, dass ein neues Hauptrelease
+# einer Bibliothek die Einrichtung auf einem anderen Rechner kaputtmacht.
+numpy==2.5.4
+scipy==1.18.1
+trimesh==5.1.1
+manifold3d==3.5.4
+rtree==1.4.1
+embreex==4.4.0
+fast-simplification==0.2.0
+fastapi==0.147.0
+pydantic==2.14.1
+uvicorn==0.54.0
+python-multipart==0.0.32
+pymeshfix==0.18.1

@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HelmPad</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head>
+<body>
+<!-- Texte stehen in i18n.js; data-i18n = Schlüssel für den Inhalt, data-i18n-title = für den Tooltip -->
+<aside id="panel">
+  <header class="brand">
+    <div class="logo">⛑</div>
+    <div><h1>HelmPad</h1><p data-i18n="app.subtitle"></p></div>
+    <div class="brand-tools">
+      <select id="lang" data-i18n-title="app.language" aria-label="Sprache / Language"></select>
+      <button id="proj-save" class="tool-btn" data-i18n-title="project.save" aria-label="save">💾</button>
+      <button id="proj-load" class="tool-btn" data-i18n-title="project.load" aria-label="load">📂</button>
+      <input type="file" id="proj-file" accept=".json,application/json" hidden>
+      <button id="donate-btn" class="donate-btn"><span aria-hidden="true">♥</span> <span data-i18n="donate.btn"></span></button>
+      <label class="tut-toggle" data-i18n-title="app.tutorials.title">
+        <input type="checkbox" id="tut-all"> <span data-i18n="app.tutorials"></span></label>
+    </div>
+    <nav id="steps" class="steps"></nav>
+  </header>
+
+  <!-- 1 Helm -->
+  <section class="step" id="step-helm">
+    <h2><span class="num">1</span><span data-i18n="helm.h"></span></h2>
+    <label id="drop" class="drop" tabindex="0" role="button">
+      <input type="file" id="file" accept=".stl,.obj,.ply,.3mf,.off,.glb" hidden>
+      <strong data-i18n="helm.drop.title"></strong><span data-i18n="helm.drop.sub"></span>
+    </label>
+    <div id="helm-info" class="info hidden"></div>
+    <div id="orient-box" class="info orient hidden" role="status"></div>
+    <label class="inline"><span data-i18n="helm.unit"></span><select id="einheit">
+      <option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in" data-i18n="unit.in"></option>
+    </select></label>
+
+    <h3 data-i18n="helm.align.h"></h3>
+    <p class="hint top" data-i18n="helm.align.hint"></p>
+    <div class="row">
+      <button class="mini" id="orient-auto" data-i18n="orient.auto" data-i18n-title="orient.auto.title"></button>
+      <button class="mini" data-preset="z" data-i18n="helm.preset.z"></button>
+      <button class="mini" data-preset="y" data-i18n="helm.preset.y"></button>
+      <button class="mini" data-preset="reset" data-i18n="helm.preset.reset" data-i18n-title="helm.preset.reset.title"></button>
+    </div>
+    <div class="rot-grid">
+      <span data-i18n="helm.rot.x"></span><button class="mini" data-rot="x,-90">↶ 90°</button><button class="mini" data-rot="x,90">↷ 90°</button>
+      <span data-i18n="helm.rot.y"></span><button class="mini" data-rot="y,-90">↶ 90°</button><button class="mini" data-rot="y,90">↷ 90°</button>
+      <span data-i18n="helm.rot.z"></span><button class="mini" data-rot="z,-90">↶ 90°</button><button class="mini" data-rot="z,90">↷ 90°</button>
+    </div>
+    <label class="check"><input type="checkbox" id="gizmo" checked> <span data-i18n="helm.gizmo"></span></label>
+    <label class="check"><input type="checkbox" id="snap" checked> <span data-i18n="helm.snap"></span></label>
+    <p class="hint" id="angles"></p>
+  </section>
+
+  <!-- 2 Punkte -->
+  <section class="step" id="step-marks">
+    <h2><span class="num">2</span><span data-i18n="marks.h"></span> <span class="opt" data-i18n="opt"></span></h2>
+    <p class="hint top" data-i18n="marks.hint"></p>
+    <ul id="marks" class="marks"></ul>
+    <button id="auto-align" class="mini wide" disabled data-i18n="marks.auto"></button>
+    <p class="hint" data-i18n="marks.note"></p>
+  </section>
+
+  <!-- 3 Kopf -->
+  <section class="step" id="step-kopf">
+    <h2><span class="num">3</span><span data-i18n="kopf.h"></span></h2>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-mode="masse" data-i18n="kopf.mode.masse"></button>
+      <button class="tab" disabled data-i18n-title="soon.title"><span data-i18n="kopf.mode.scan"></span> <em data-i18n="soon"></em></button>
+      <button class="tab" disabled data-i18n-title="soon.title"><span data-i18n="kopf.mode.fotos"></span> <em data-i18n="soon"></em></button>
+    </div>
+    <div class="fields">
+      <label class="field"><span><span data-i18n="kopf.umfang"></span> <b>*</b></span>
+        <input type="number" id="umfang" placeholder="570" min="400" max="750" step="1" required><i>mm</i>
+        <small data-i18n="kopf.umfang.hint"></small></label>
+      <label class="field"><span data-i18n="kopf.laenge"></span>
+        <input type="number" id="laenge" min="140" max="260" step="1"><i>mm</i>
+        <small data-i18n="kopf.laenge.hint"></small></label>
+      <label class="field"><span data-i18n="kopf.breite"></span>
+        <input type="number" id="breite" min="110" max="210" step="1"><i>mm</i>
+        <small data-i18n="kopf.breite.hint"></small></label>
+      <label class="field"><span data-i18n="kopf.ohr"></span>
+        <input type="number" id="ohr_scheitel" min="90" max="180" step="1"><i>mm</i>
+        <small data-i18n="kopf.ohr.hint"></small></label>
+      <label class="field"><span data-i18n="kopf.gesicht"></span>
+        <input type="number" id="gesicht" min="80" max="170" step="1"><i>mm</i>
+        <small data-i18n="kopf.gesicht.hint"></small></label>
+    </div>
+    <p class="hint" data-i18n="kopf.note"></p>
+  </section>
+
+  <!-- 4 Aufteilung -->
+  <section class="step" id="step-zonen">
+    <h2><span class="num">4</span><span data-i18n="zonen.h"></span></h2>
+    <div id="presets" class="presets"></div>
+    <ul id="zone-list" class="zones"></ul>
+    <button id="zone-add" class="ghost" data-i18n="zonen.add"></button>
+  </section>
+
+  <!-- 5 Einstellungen: aufklappbare Gruppen, rechts jeweils die aktuelle Wahl -->
+  <section class="step" id="step-params">
+    <h2><span class="num">5</span><span data-i18n="params.h"></span></h2>
+
+    <details class="group" open>
+      <summary><span data-i18n="grp.pads"></span><em class="sum" id="sum-pads"></em></summary>
+      <div class="grid2">
+        <label class="field"><span data-i18n="params.dicke"></span><input type="number" id="dicke" value="10" min="4" max="30" step="0.5"><i>mm</i></label>
+        <label class="field"><span data-i18n="params.kompression"></span><input type="number" id="kompression" value="2" min="0" max="6" step="0.5"><i>mm</i></label>
+        <label class="field"><span data-i18n="params.klett"></span><input type="number" id="klett" value="3" min="0" max="8" step="0.5"><i>mm</i></label>
+        <label class="field"><span data-i18n="params.kanaele"></span><input type="number" id="kanaele" value="22" min="0" max="60" step="1"><i>mm</i></label>
+      </div>
+    </details>
+
+    <details class="group" open>
+      <summary><span data-i18n="params.size.h"></span><em class="sum" id="sum-size"></em></summary>
+      <div class="radios">
+        <label class="check"><input type="radio" name="scale-mode" value="auto" checked>
+          <span><b data-i18n="scale.auto"></b><small data-i18n="scale.auto.sub"></small></span></label>
+        <label class="check"><input type="radio" name="scale-mode" value="prop">
+          <span><b data-i18n="scale.prop"></b><small data-i18n="scale.prop.sub"></small></span></label>
+        <label class="check"><input type="radio" name="scale-mode" value="fix">
+          <span><b data-i18n="scale.fix"></b><small data-i18n="scale.fix.sub"></small></span></label>
+      </div>
+      <label class="field hidden" id="distort-field"><span data-i18n="params.distort"></span><input type="number" id="verzerrung" value="12" min="0" max="30" step="1"><i>%</i></label>
+      <label class="field hidden" id="scale-field"><span data-i18n="params.factor"></span><input type="number" id="skalierung" value="100" min="50" max="200" step="0.5"><i>%</i></label>
+    </details>
+
+    <details class="group">
+      <summary><span data-i18n="grp.mount"></span><em class="sum" id="sum-mount"></em></summary>
+      <div class="radios">
+        <label class="check"><input type="radio" name="mount" value="klett" checked>
+          <span><b data-i18n="mount.klett"></b><small data-i18n="mount.klett.sub"></small></span></label>
+        <label class="check"><input type="radio" name="mount" value="magnet">
+          <span><b data-i18n="mount.magnet"></b><small data-i18n="mount.magnet.sub"></small></span></label>
+      </div>
+      <div class="grid2 hidden" id="magnet-opts">
+        <label class="field"><span data-i18n="magnet.d"></span><input type="number" id="magnet-d" value="10" min="3" max="25" step="1"><i>mm</i></label>
+        <label class="field"><span data-i18n="magnet.h"></span><input type="number" id="magnet-h" value="3" min="1" max="10" step="0.5"><i>mm</i></label>
+      </div>
+      <label class="inline"><span data-i18n="params.marks"></span><select id="einbau">
+        <option value="rille" data-i18n="mark.rille"></option><option value="steg" data-i18n="mark.steg"></option><option value="keine" data-i18n="mark.keine"></option>
+      </select></label>
+      <label class="check"><input type="checkbox" id="nummern" checked> <span data-i18n="params.numbers"></span></label>
+      <p class="hint top" data-i18n="params.aid.hint"></p>
+    </details>
+
+    <details class="group">
+      <summary><span data-i18n="grp.extras"></span><em class="sum" id="sum-extras"></em></summary>
+      <label class="check"><input type="checkbox" id="brille"> <span data-i18n="glasses"></span></label>
+      <label class="check"><input type="checkbox" id="probestueck" checked> <span data-i18n="testpiece"></span></label>
+      <div class="acc-row"><label class="check"><input type="checkbox" id="acc-riemen"> <span data-i18n="acc.strap"></span></label>
+        <label class="field"><input type="number" id="acc-riemen-w" value="25" min="10" max="50" step="1"><i>mm</i></label></div>
+      <div class="acc-row"><label class="check"><input type="checkbox" id="acc-luefter"> <span data-i18n="acc.fan"></span></label>
+        <label class="field"><select id="acc-luefter-s"><option value="30">30 mm</option><option value="40" selected>40 mm</option><option value="25">25 mm</option></select></label></div>
+      <div class="acc-row"><label class="check"><input type="checkbox" id="acc-mikro"> <span data-i18n="acc.mic"></span></label>
+        <label class="field"><input type="number" id="acc-mikro-d" value="6" min="3" max="15" step="0.5"><i>mm</i></label></div>
+      <p class="hint top" data-i18n="acc.hint"></p>
+    </details>
+
+    <details class="group">
+      <summary><span data-i18n="foam.h"></span><em class="sum" id="sum-foam"></em></summary>
+      <label class="check"><input type="checkbox" id="muster"> <span data-i18n="foam.enable"></span></label>
+      <div class="grid2 hidden" id="muster-opts">
+        <label class="field"><span data-i18n="foam.sheet"></span><select id="muster-staerke">
+          <option value="3">3 mm</option><option value="5">5 mm</option><option value="6" selected>6 mm</option>
+          <option value="8">8 mm</option><option value="10">10 mm</option><option value="12">12 mm</option>
+          <option value="15">15 mm</option><option value="20">20 mm</option></select></label>
+        <label class="field"><span data-i18n="foam.paper"></span><select id="papier">
+          <option value="A4">A4</option><option value="Letter">Letter</option></select></label>
+      </div>
+      <p class="hint top" data-i18n="foam.hint"></p>
+    </details>
+
+    <details class="group">
+      <summary><span data-i18n="params.offset.h"></span><em class="sum" id="sum-offset"></em></summary>
+      <div class="grid3">
+        <label><span data-i18n="offset.x"></span><input type="number" id="vx" value="0" step="1"></label>
+        <label><span data-i18n="offset.y"></span><input type="number" id="vy" value="0" step="1"></label>
+        <label><span data-i18n="offset.z"></span><input type="number" id="vz" value="0" step="1"></label>
+      </div>
+      <p class="hint" data-i18n="offset.hint"></p>
+    </details>
+  </section>
+
+  <!-- 6 Teilen -->
+  <section class="step" id="step-split">
+    <h2><span class="num">6</span><span data-i18n="split.h"></span></h2>
+    <div class="radios">
+      <label class="check"><input type="radio" name="split-mode" value="keine" checked>
+        <span><b data-i18n="split.none"></b><small data-i18n="split.none.sub"></small></span></label>
+      <label class="check"><input type="radio" name="split-mode" value="auto">
+        <span><b data-i18n="split.auto"></b><small data-i18n="split.auto.sub"></small></span></label>
+      <label class="check"><input type="radio" name="split-mode" value="manuell">
+        <span><b data-i18n="split.manual"></b><small data-i18n="split.manual.sub"></small></span></label>
+    </div>
+    <div id="split-opts" class="hidden">
+      <label data-i18n="split.bed"></label>
+      <div class="grid3 tight">
+        <label><span data-i18n="bed.x"></span><input type="number" id="bed-x" value="256" min="50" step="1"></label>
+        <label><span data-i18n="bed.y"></span><input type="number" id="bed-y" value="256" min="50" step="1"></label>
+        <label><span data-i18n="bed.z"></span><input type="number" id="bed-z" value="256" min="50" step="1"></label>
+      </div>
+      <div id="manual-cuts" class="hidden">
+        <h3 data-i18n="split.cuts.h"></h3>
+        <div class="cut-row"><label class="check"><input type="checkbox" id="cut-x" checked> <span data-i18n="cut.x"></span></label>
+          <label class="field"><input type="number" id="cut-x-pos" value="0" step="1"><i>mm</i></label></div>
+        <div class="cut-row"><label class="check"><input type="checkbox" id="cut-y"> <span data-i18n="cut.y"></span></label>
+          <label class="field"><input type="number" id="cut-y-pos" value="0" step="1"><i>mm</i></label></div>
+        <div class="cut-row"><label class="check"><input type="checkbox" id="cut-z"> <span data-i18n="cut.z"></span></label>
+          <label class="field"><input type="number" id="cut-z-pos" value="60" step="1"><i>mm</i></label></div>
+        <p class="hint top" data-i18n="split.cuts.hint"></p>
+      </div>
+      <h3 data-i18n="dowel.h"></h3>
+      <div class="grid2">
+        <label class="field"><span data-i18n="dowel.d"></span><input type="number" id="dw-d" value="5" min="2" max="15" step="0.5"><i>mm</i></label>
+        <label class="field"><span data-i18n="dowel.l"></span><input type="number" id="dw-l" value="16" min="6" max="60" step="1"><i>mm</i></label>
+        <label class="field"><span data-i18n="dowel.a"></span><input type="number" id="dw-a" value="55" min="15" step="5"><i>mm</i></label>
+        <label class="field"><span data-i18n="dowel.s"></span><input type="number" id="dw-s" value="0.15" min="0" max="1" step="0.05"><i>mm</i></label>
+      </div>
+      <p class="hint top" data-i18n="dowel.hint"></p>
+    </div>
+  </section>
+
+  <!-- 7 Berechnen -->
+  <section class="step" id="step-run">
+    <h2><span class="num">7</span><span data-i18n="run.h"></span></h2>
+    <button id="run" class="primary" disabled data-i18n="run.btn"></button>
+    <p id="run-hint" class="hint"></p>
+    <div id="result" class="hidden"></div>
+  </section>
+</aside>
+
+<main id="stage">
+  <nav class="viewbar">
+    <div class="seg" id="views">
+      <button data-view="helm" class="active" data-i18n="view.helm"></button>
+      <button data-view="kopf" data-i18n="view.kopf"></button>
+      <button data-view="ergebnis" disabled data-i18n="view.ergebnis"></button>
+    </div>
+    <div class="toggles" id="layer-toggles">
+      <label><input type="checkbox" id="l-kopf" checked> <span data-i18n="layer.kopf"></span></label>
+      <label><input type="checkbox" id="l-helm" checked> <span data-i18n="layer.helm"></span></label>
+      <label><input type="checkbox" id="l-polster" checked> <span data-i18n="layer.polster"></span></label>
+      <label><input type="checkbox" id="l-original"> <span data-i18n="layer.original"></span></label>
+      <label><input type="checkbox" id="l-nummern" checked> <span data-i18n="layer.nummern"></span></label>
+      <label class="split-only"><input type="checkbox" id="l-duebel" checked> <span data-i18n="layer.duebel"></span></label>
+      <label class="split-only"><input type="checkbox" id="l-explode"> <span data-i18n="layer.explode"></span></label>
+      <label class="split-only"><input type="checkbox" id="l-ebenen" checked> <span data-i18n="layer.ebenen"></span></label>
+      <label><input type="checkbox" id="l-schnitt"> <span data-i18n="layer.schnitt"></span></label>
+    </div>
+    <button id="reset-cam" class="ghost small" data-i18n="view.reset"></button>
+  </nav>
+  <div id="canvas-wrap"></div>
+  <div id="empty" class="empty" data-i18n="empty"></div>
+  <div id="busy" class="busy hidden"><div class="spinner"></div><span id="busy-text"></span></div>
+  <div id="pickbar" class="pickbar hidden"><span id="pick-text"></span><button id="pick-cancel" data-i18n="cancel"></button></div>
+  <div id="toast" class="toast hidden"></div>
+</main>
+
+<!-- Spenden: Links stehen in spenden.json (leer = "bald verfügbar") -->
+<div id="donate" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="donate-h">
+  <div class="modal-card">
+    <button id="donate-close" class="modal-x" data-i18n-title="donate.close" aria-label="×">✕</button>
+    <div class="donate-heart" aria-hidden="true">♥</div>
+    <h2 id="donate-h" data-i18n="donate.h"></h2>
+    <p data-i18n="donate.text"></p>
+    <div class="donate-options">
+      <a id="donate-paypal" class="donate-opt paypal" target="_blank" rel="noopener">
+        <b>PayPal</b><span data-i18n="donate.paypal"></span><em class="soon" data-i18n="donate.soon"></em></a>
+      <a id="donate-revolut" class="donate-opt revolut" target="_blank" rel="noopener">
+        <b>Revolut</b><span data-i18n="donate.revolut"></span><em class="soon" data-i18n="donate.soon"></em></a>
+    </div>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
