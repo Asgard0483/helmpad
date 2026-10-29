@@ -25,7 +25,7 @@ def run(helm_path, meas: HeadMeasurements, zones, pp: PadParams, out_dir,
         mark_mode="rille", pad_numbers=True,
         split_mode="keine", cuts=None, bed=(256, 256, 256), dowel=None,
         test_piece=True, mount="klett", magnet=None, glasses=False, accessories=None, make_3mf=True,
-        pattern=None):
+        pattern=None, head_override=None):
     """`rotation`: 3x3-Drehung Datei -> Kopf-Koordinaten (Vorrang vor up/front).
     `landmarks`: Punkte in Datei-Koordinaten, Schlüssel 'ohr_links', 'ohr_rechts', 'augen', ...
     `proportional`: Breite/Länge/Höhe des Helms einzeln an den Kopf anpassen (max. `max_distort`).
@@ -36,6 +36,7 @@ def run(helm_path, meas: HeadMeasurements, zones, pp: PadParams, out_dir,
     `glasses`: Freiraum für Brillenbügel von der Schläfe bis zum Ohr.
     `accessories`: {'riemen': Gurtbreite, 'luefter': 30|40, 'mikrofon': Durchmesser} – jeweils optional.
     `pattern`: {'sheet': Schaumstoffstärke mm, 'paper': 'A4'|'Letter'} – 2D-Schnittmuster als PDF/SVG/DXF.
+    `head_override`: (Mesh, Infos) eines gescannten Kopfes (headscan.head_from_scan) statt des Modells aus Maßen.
     """
     out = Path(out_dir)
     (out / "polster").mkdir(parents=True, exist_ok=True)
@@ -45,8 +46,15 @@ def run(helm_path, meas: HeadMeasurements, zones, pp: PadParams, out_dir,
     # bei Magneten ersetzt der Magnethalter das Klettband als Abstand zwischen Polster und Helm
     pp = replace(pp, glasses=glasses, mount_gap=mp.cup_height if mp else pp.mount_gap)
 
-    log("Kopfmodell erzeugen ...")
-    head, _, head_info = build_head(meas)
+    scan_warnings = []
+    if head_override is not None:
+        log("Kopfmodell aus dem Scan übernehmen ...")
+        head, head_info = head_override
+        head_info = dict(head_info)
+        scan_warnings = head_info.pop("warnungen", [])
+    else:
+        log("Kopfmodell erzeugen ...")
+        head, _, head_info = build_head(meas)
     log("Helm laden ...")
     helmet, rot = load_helmet(helm_path, up, front, units, rotation)
     log("Helm prüfen und ggf. reparieren ...")
@@ -112,7 +120,7 @@ def run(helm_path, meas: HeadMeasurements, zones, pp: PadParams, out_dir,
     if viewer:
         write_viewer(out / "vorschau.html", head, helmet_out, pads)
 
-    warnings = list(fit.warnings)
+    warnings = list(scan_warnings) + list(fit.warnings)
     if repair_state == "repariert":
         warnings.append(msg("repaired", "Das Helm-Mesh war nicht geschlossen und wurde automatisch repariert."))
     elif repair_state == "keine_wand":

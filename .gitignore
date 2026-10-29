@@ -14,3 +14,6 @@ helmpad/web/_test.stl
 .claude/settings.local.json
 Thumbs.db
 desktop.ini
+
+# Protokolle von OpenMVS, falls es im Projektordner gestartet wird
+*.log

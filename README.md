@@ -26,7 +26,14 @@ Jeder Schritt hat einen eigenen Reiter (oben in der Seitenleiste, mit Zurück/We
 2. **Punkte** (optional) (Augen, Scheitel, Kinn, Ohr links/rechts): Punkt wählen, ins Modell klicken.
      „Automatisch ausrichten“ dreht den Helm danach selbst (braucht beide Ohren + einen weiteren Punkt,
      oder Scheitel + Kinn + Augen). Die Ohren legen außerdem die Sitzposition des Kopfes fest, sonst die Augen die Höhe.
-3. **Kopf erfassen**: Maße eingeben (iPhone-Scan und Fotos folgen in Phase 2/3)
+3. **Kopf erfassen** – drei Wege, der Kopfumfang ist immer Pflicht (er legt die Größe fest):
+   - **Maße eingeben**: Umfang, optional Länge, Breite, Ohr–Scheitel, Gesicht.
+   - **3D-Scan**: fertiges Kopfmodell (STL, OBJ, PLY, GLB) laden, z.B. aus RealityScan, Polycam oder KIRI Engine.
+     Dann am Modell Ohr links, Ohr rechts, Augen (Nasenwurzel) und Scheitel anklicken. Lage, Einheit und
+     Hintergrund spielen keine Rolle; vertauschte Ohren werden erkannt.
+   - **Video**: einmal rundherum gefilmt (20–40 s, zweite Runde etwas höher), HelmPad rechnet daraus lokal ein
+     3D-Modell (siehe „Kopf aus Video“ unten), danach wie beim 3D-Scan die vier Punkte setzen.
+   - Wichtig bei Scan und Video: **enge Bade- oder Perückenkappe** tragen, sonst wird die Frisur gemessen.
 4. **Aufteilung**: Vorlage mit 3, 6 oder 10 Teilen, jede Zone verschieben, vergrößern, drehen, quer oder längs teilen
 5. **Polster & Sitz**: Dicke, Anpressdruck, Klettband, Lüftung, Sitzkorrektur
    - Helmgröße: gleichmäßig (Form bleibt exakt), an Kopfform (Breite/Länge/Höhe einzeln, max. ±12 %) oder fester Faktor
@@ -73,6 +80,25 @@ Der Knopf „♥ Unterstützen“ öffnet ein Fenster mit PayPal und Revolut. Di
 ```
 
 Nur `https://`-Links werden angenommen; ein Neustart ist nicht nötig, einmal die Seite neu laden reicht.
+
+## Kopf aus Video (Photogrammetrie)
+
+Läuft komplett auf dem eigenen PC, nur mit dem Prozessor (keine NVIDIA-Karte nötig), Dauer etwa 10–30 Minuten.
+Benötigt werden **COLMAP** (Kamerapositionen) und **OpenMVS** (Oberfläche) sowie **ffmpeg**. Einmalig einrichten:
+
+```bash
+%LOCALAPPDATA%\helmpad-venv\Scripts\python -m helmpad.photogrammetry
+winget install Gyan.FFmpeg
+```
+
+Das lädt COLMAP 4.2.1 (ohne CUDA) und OpenMVS 2.4.0 von deren offiziellen GitHub-Seiten nach
+`%LOCALAPPDATA%\helmpad-tools` (~150 MB). Andere Installationsorte über `HELMPAD_COLMAP` (Pfad zu `colmap.exe`)
+und `HELMPAD_OPENMVS` (Ordner mit `DensifyPointCloud.exe`). Ablauf: Einzelbilder (ffmpeg) → Merkmale, Zuordnung,
+Kamerapositionen (COLMAP) → Punktwolke und Oberfläche (OpenMVS) → Zuschnitt auf den Bereich, den alle Kameras
+anschauen. Die Protokolle der einzelnen Schritte liegen in `arbeitsdaten/koepfe/<id>/arbeit_video/`.
+
+Tipps fürs Video: gleichmäßiges, helles Licht; ein unruhiger Hintergrund hilft; still sitzen, eine zweite Person
+filmt; langsam bewegen, damit die Bilder nicht verwischen.
 
 ## Kommandozeile
 

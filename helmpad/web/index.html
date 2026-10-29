@@ -71,14 +71,54 @@
   <section class="step" id="step-kopf">
     <h2><span class="num">3</span><span data-i18n="kopf.h"></span></h2>
     <div class="tabs" role="tablist">
-      <button class="tab active" data-mode="masse" data-i18n="kopf.mode.masse"></button>
-      <button class="tab" disabled data-i18n-title="soon.title"><span data-i18n="kopf.mode.scan"></span> <em data-i18n="soon"></em></button>
-      <button class="tab" disabled data-i18n-title="soon.title"><span data-i18n="kopf.mode.fotos"></span> <em data-i18n="soon"></em></button>
+      <button class="tab active" role="tab" data-mode="masse" data-i18n="kopf.mode.masse"></button>
+      <button class="tab" role="tab" data-mode="scan" data-i18n="kopf.mode.scan"></button>
+      <button class="tab" role="tab" data-mode="video" data-i18n="kopf.mode.video"></button>
     </div>
+
+    <!-- Video -> 3D-Modell (Photogrammetrie, läuft lokal) -->
+    <div id="video-panel" class="hidden">
+      <details class="video-tips" open><summary data-i18n="video.tips.h"></summary>
+        <ol>
+          <li data-i18n="video.tip.cap"></li>
+          <li data-i18n="video.tip.light"></li>
+          <li data-i18n="video.tip.move"></li>
+          <li data-i18n="video.tip.time"></li>
+        </ol>
+      </details>
+      <p id="video-tools" class="warn hidden"></p>
+      <label id="video-drop" class="drop" tabindex="0" role="button">
+        <input type="file" id="video-file" accept=".mp4,.mov,.m4v,.avi,.mkv,.webm,video/*" hidden>
+        <strong data-i18n="video.drop.title"></strong><span data-i18n="video.drop.sub"></span>
+      </label>
+      <div id="video-progress" class="video-progress hidden">
+        <div class="bar"><i></i></div>
+        <div class="row"><span id="video-stage"></span><button class="mini" id="video-cancel" data-i18n="video.cancel"></button></div>
+      </div>
+    </div>
+
+    <!-- fertiges 3D-Modell vom Kopf (Scan-App oder aus dem Video) -->
+    <div id="scan-panel" class="hidden">
+      <label id="scan-drop" class="drop" tabindex="0" role="button">
+        <input type="file" id="scan-file" accept=".stl,.obj,.ply,.glb,.off,.3mf" hidden>
+        <strong data-i18n="scan.drop.title"></strong><span data-i18n="scan.drop.sub"></span>
+      </label>
+      <div id="scan-info" class="info hidden"></div>
+      <div id="scan-mark-box" class="hidden">
+        <p class="hint top" data-i18n="scan.marks.hint"></p>
+        <ul id="scan-marks" class="marks"></ul>
+        <div class="row">
+          <button class="mini" id="scan-show" data-i18n="scan.show"></button>
+        </div>
+        <div id="scan-result" class="hidden"></div>
+      </div>
+    </div>
+
     <div class="fields">
       <label class="field"><span><span data-i18n="kopf.umfang"></span> <b>*</b></span>
         <input type="number" id="umfang" placeholder="570" min="400" max="750" step="1" required><i>mm</i>
-        <small data-i18n="kopf.umfang.hint"></small></label>
+        <small data-i18n="kopf.umfang.hint"></small><small id="umfang-scan-hint" class="hidden" data-i18n="scan.umfang.hint"></small></label>
+      <div id="masse-extra">
       <label class="field"><span data-i18n="kopf.laenge"></span>
         <input type="number" id="laenge" min="140" max="260" step="1"><i>mm</i>
         <small data-i18n="kopf.laenge.hint"></small></label>
@@ -91,8 +131,9 @@
       <label class="field"><span data-i18n="kopf.gesicht"></span>
         <input type="number" id="gesicht" min="80" max="170" step="1"><i>mm</i>
         <small data-i18n="kopf.gesicht.hint"></small></label>
+      </div>
     </div>
-    <p class="hint" data-i18n="kopf.note"></p>
+    <p class="hint" id="kopf-note" data-i18n="kopf.note"></p>
   </section>
 
   <!-- 4 Aufteilung -->

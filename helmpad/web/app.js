@@ -23,6 +23,11 @@ const state = {
   rev: 0,              // zählt jede Änderung – erkennt Änderungen während einer Berechnung
   running: false,      // Berechnung läuft (gegen Doppelklick)
   visited: new Set(['step-helm']),  // Fortschritt erst zeigen, wenn ein Reiter besucht wurde
+  headMode: 'masse',   // Kopf aus 'masse', 'scan' (fertiges 3D-Modell) oder 'video' (Photogrammetrie)
+  scan: null,          // {id, name, dreiecke, geo, marks, info}
+  scanPicking: null,   // welcher Punkt am Kopfscan gerade gesetzt wird
+  scanView: false,     // Kopf-Ansicht zeigt den Rohscan (zum Markieren) statt des fertigen Kopfes
+  video: null,         // laufende Video-Auswertung {id, timer}
 };
 
 /* ---------------- 3D-Szene ---------------- */
@@ -263,6 +268,19 @@ function helmHull() {
 let downAt = null;
 renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', e => {
+  if (view === 'kopf' && state.scanPicking && scanMesh && downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) <= 5) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((e.clientX - rect.left) / rect.width * 2 - 1, -(e.clientY - rect.top) / rect.height * 2 + 1), camera);
+    const hit = ray.intersectObject(scanMesh)[0];
+    if (!hit) { toast(t('toast.no_hit')); return; }
+    const p = scanMesh.worldToLocal(hit.point.clone());
+    state.scan.marks[state.scanPicking] = [p.x, p.y, p.z];
+    const next = SCAN_MARKS.map(([k]) => k).find(k => !state.scan.marks[k]);
+    startScanPick(next || null);
+    scanMarksChanged();
+    return;
+  }
   if (view === 'kopf' && downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) <= 5) {
     const rect = renderer.domElement.getBoundingClientRect();
     const ray = new THREE.Raycaster();
@@ -415,6 +433,7 @@ function measurements() {
 }
 let headReq = 0;
 const loadHead = debounce(async () => {
+  if (usesScan() && state.scan?.geo) { loadScanHead(); return; }  // ohne Scan: Kopf aus dem Umfang als Platzhalter
   const m = measurements();
   const example = !m.umfang;
   if (example) m.umfang = 570;  // Vorschau mit Beispielkopf, Berechnen bleibt gesperrt
@@ -446,6 +465,236 @@ function headRadius(d) {
   const ti = fi - i0, tj = fj - j0, r = (i, j) => R.r[i * R.n_az + j];
   return (r(i0, j0) * (1 - tj) + r(i0, j0 + 1) * tj) * (1 - ti) + (r(i0 + 1, j0) * (1 - tj) + r(i0 + 1, j0 + 1) * tj) * ti;
 }
+
+/* ---------------- 3b Kopf aus Scan oder Video ---------------- */
+const SCAN_MARKS = [['ohr_links', '#b56dd6'], ['ohr_rechts', '#e4572e'], ['augen', '#3ecf6e'], ['scheitel', '#4d8dff']];
+let scanMesh = null;
+const usesScan = () => state.headMode !== 'masse';
+const scanComplete = () => !!state.scan?.geo && SCAN_MARKS.every(([k]) => state.scan.marks[k]) && !!state.scan.headOk;
+
+function setHeadMode(mode) {
+  state.headMode = mode;
+  document.querySelectorAll('#step-kopf .tab[data-mode]').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+    b.setAttribute('aria-selected', String(b.dataset.mode === mode));
+  });
+  $('masse-extra').classList.toggle('hidden', mode !== 'masse');
+  $('kopf-note').classList.toggle('hidden', mode !== 'masse');
+  $('umfang-scan-hint').classList.toggle('hidden', mode === 'masse');
+  $('video-panel').classList.toggle('hidden', mode !== 'video');
+  // Scan-Bereich: im Scan-Modus immer, im Video-Modus sobald das Modell fertig ist
+  $('scan-panel').classList.toggle('hidden', mode === 'masse' || (mode === 'video' && !state.scan?.fromVideo));
+  $('scan-drop').classList.toggle('hidden', mode !== 'scan');
+  if (mode === 'masse' && state.scanPicking) startScanPick(null);
+  if (mode === 'video') checkVideoTools();
+  state.scanView = usesScan() && !!state.scan?.geo && !scanComplete();
+  renderScanPanel();
+  loadHead(); markDirty();
+}
+document.querySelectorAll('#step-kopf .tab[data-mode]').forEach(b => b.onclick = () => setHeadMode(b.dataset.mode));
+
+function renderScanPanel() {
+  const sc = state.scan;
+  $('scan-info').classList.toggle('hidden', !sc);
+  $('scan-mark-box').classList.toggle('hidden', !sc?.geo);
+  if (!sc) return;
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  $('scan-info').innerHTML = `<b>${esc(sc.name)}</b><br>${t('scan.info', {n: (sc.dreiecke || 0).toLocaleString(getLang())})}`;
+  const ul = $('scan-marks'); ul.innerHTML = '';
+  for (const [k, col] of SCAN_MARKS) {
+    const set = !!sc.marks[k], active = state.scanPicking === k;
+    const li = document.createElement('li');
+    li.className = 'mark' + (set ? ' set' : '') + (active ? ' active' : '');
+    li.tabIndex = 0; li.setAttribute('role', 'button');
+    li.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === li) { e.preventDefault(); li.click(); } };
+    li.innerHTML = `<span class="dot" style="background:${col}"></span>${t('scanmark.' + k)}
+      <span class="state">${active ? t('marks.picking') : set ? t('marks.set') : t('marks.unset')}</span>
+      ${set ? `<button class="icon" title="${t('remove')}">✕</button>` : ''}`;
+    li.onclick = e => {
+      if (e.target.tagName === 'BUTTON') { delete sc.marks[k]; scanMarksChanged(); return; }
+      startScanPick(active ? null : k);
+    };
+    ul.appendChild(li);
+  }
+  $('scan-show').textContent = state.scanView ? t('scan.show.head') : t('scan.show');
+  $('scan-show').disabled = !scanComplete();
+}
+$('scan-show').onclick = () => { state.scanView = !state.scanView; renderScanPanel(); drawKopfView(); };
+
+function startScanPick(k) {
+  state.scanPicking = k;
+  if (k) {
+    state.scanView = true;
+    if (view !== 'kopf') setView('kopf');
+    drawKopfView();
+  }
+  $('stage').classList.toggle('picking', !!k);
+  $('pickbar').classList.toggle('hidden', !k);
+  if (k) $('pick-text').textContent = t('pick.text', {name: t('scanmark.' + k)});
+  renderScanPanel();
+}
+$('pick-cancel').addEventListener('click', () => startScanPick(null));
+addEventListener('keydown', e => { if (e.key === 'Escape' && state.scanPicking) startScanPick(null); });
+
+function scanMarksChanged() {
+  state.scan.headOk = false;
+  renderScanPanel(); drawKopfView(); loadHead(); markDirty();
+}
+
+/** Kopf-Ansicht: Rohscan mit Punkten (zum Markieren) oder fertiger Kopf mit Polsterzonen. */
+function drawKopfView() {
+  if (!(usesScan() && state.scanView && state.scan?.geo)) { scanMesh = null; drawHead(); return; }
+  clear(groups.kopf);
+  const geo = state.scan.geo;
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+  const holder = new THREE.Group();
+  scanMesh = new THREE.Mesh(geo, material('#d9b38c', 1, {side: THREE.DoubleSide}));
+  holder.add(scanMesh);
+  // Scans haben beliebige Einheiten: auf ~250 mm Anzeigegröße bringen und mittig stellen
+  const r = geo.boundingSphere.radius || 1, k = 250 / r;
+  holder.scale.setScalar(k);
+  holder.position.copy(geo.boundingSphere.center).multiplyScalar(-k);
+  for (const [name, col] of SCAN_MARKS) {
+    const p = state.scan.marks[name];
+    if (!p) continue;
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(4 / k, 16, 12), new THREE.MeshBasicMaterial({color: col, depthTest: false}));
+    dot.renderOrder = 6; dot.position.set(...p);
+    scanMesh.add(dot);
+  }
+  groups.kopf.add(holder);
+  holder.updateMatrixWorld(true);
+}
+
+let scanHeadReq = 0;
+async function loadScanHead() {
+  const sc = state.scan;
+  const res = $('scan-result');
+  if (!sc?.geo) { drawKopfView(); return; }
+  const missing = SCAN_MARKS.filter(([k]) => !sc.marks[k]).length;
+  const umfang = num('umfang');
+  if (missing || !umfang) {
+    sc.headOk = false;
+    res.classList.remove('hidden');
+    res.className = 'hint';
+    res.textContent = missing ? t('scan.need.marks', {n: missing}) : t('scan.need.umfang');
+    state.scanView = true;
+    drawKopfView(); updateSteps(); updateRunHint(); return;
+  }
+  const req = ++scanHeadReq;
+  res.className = 'hint'; res.textContent = t('scan.computing');
+  try {
+    const out = await (await api('/api/kopfscan/kopf', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: sc.id, markierungen: sc.marks, umfang})})).json();
+    if (req !== scanHeadReq) return;
+    state.head = out; sc.headOk = true; sc.info = out.info;
+    const i = out.info, warn = (i.warnungen || []).map(w => `<div class="warn">⚠ ${messageText(w)}</div>`).join('');
+    res.innerHTML = `<span class="ok">✓ ${t('scan.done')}</span> ${t('scan.dims', {l: i.laenge_mm, b: i.breite_mm, h: i.ohr_bis_scheitel_mm, e: i.ohrabstand_mm})}${warn}`;
+    state.scanView = false;
+    $('head-example').classList.add('hidden');
+  } catch (e) {
+    if (req !== scanHeadReq) return;
+    sc.headOk = false; state.scanView = true;
+    res.className = 'warn'; res.textContent = e.message;
+  }
+  renderScanPanel(); drawKopfView(); updateSteps(); updateRunHint();
+  if (['step-kopf', 'step-zonen'].includes(state.tab) && view !== 'kopf') setView('kopf');
+}
+
+async function useScan(info, fromVideo = false) {
+  const geo = loader.parse(await (await api(`/api/kopfscan/${info.id}/vorschau.stl`)).arrayBuffer());
+  geo.computeVertexNormals();
+  state.scan = {id: info.id, name: info.name, dreiecke: info.dreiecke, geo, marks: info.marks || {}, fromVideo, headOk: false};
+  state.scanView = true;
+  setHeadMode(state.headMode);
+  if (view !== 'kopf') setView('kopf');
+  drawKopfView();
+  frame(groups.kopf);
+  if (!SCAN_MARKS.every(([k]) => state.scan.marks[k])) startScanPick(SCAN_MARKS.map(([k]) => k).find(k => !state.scan.marks[k]));
+}
+
+async function uploadScan(file) {
+  busy(true, t('scan.loading', {name: file.name}));
+  try {
+    const fd = new FormData(); fd.append('datei', file);
+    const info = await (await api('/api/kopfscan', {method: 'POST', body: fd})).json();
+    await useScan(info);
+  } catch (e) { toast(t('toast.scan') + ': ' + e.message); }
+  busy(false);
+}
+async function restoreScan(saved) {
+  try {
+    const st = await (await api(`/api/kopfscan/${saved.id}/status`)).json();
+    if (!st.bereit) throw new Error();
+    await useScan({id: saved.id, name: saved.name, dreiecke: st.dreiecke, marks: saved.markierungen || {}});
+  } catch { toast(t('project.need_scan', {name: saved.name || ''})); }
+}
+
+function setupDrop(dropId, inputId, onFile) {
+  const d = $(dropId);
+  d.ondragover = e => { e.preventDefault(); d.classList.add('over'); };
+  d.ondragleave = () => d.classList.remove('over');
+  d.ondrop = e => { e.preventDefault(); d.classList.remove('over'); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); };
+  d.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $(inputId).click(); } });
+  $(inputId).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) onFile(f); };
+}
+setupDrop('scan-drop', 'scan-file', uploadScan);
+setupDrop('video-drop', 'video-file', uploadVideo);
+
+async function checkVideoTools() {
+  try {
+    const r = await (await api('/api/kopfvideo/bereit')).json();
+    $('video-tools').classList.toggle('hidden', r.bereit);
+    $('video-tools').textContent = r.bereit ? '' : t('video.tools.missing', {tools: r.fehlt.join(', ')});
+    $('video-drop').classList.toggle('locked', !r.bereit);
+  } catch { /* Server-Fehler zeigt api() schon an */ }
+}
+
+async function uploadVideo(file) {
+  if (state.video) return;
+  $('video-progress').classList.remove('hidden');
+  $('video-drop').classList.add('locked');
+  setVideoProgress(0, t('video.uploading'));
+  try {
+    const fd = new FormData(); fd.append('datei', file);
+    const info = await (await api('/api/kopfvideo', {method: 'POST', body: fd})).json();
+    state.video = {id: info.id, name: info.name};
+    pollVideo();
+  } catch (e) {
+    toast(t('toast.video') + ': ' + e.message);
+    endVideo();
+  }
+}
+function setVideoProgress(frac, text) {
+  $('video-progress').querySelector('.bar i').style.width = `${Math.round(frac * 100)}%`;
+  $('video-stage').textContent = text;
+}
+function endVideo() {
+  if (state.video?.timer) clearTimeout(state.video.timer);
+  state.video = null;
+  $('video-drop').classList.remove('locked');
+  $('video-progress').classList.add('hidden');
+}
+async function pollVideo() {
+  const v = state.video;
+  if (!v) return;
+  try {
+    const st = await (await api(`/api/kopfscan/${v.id}/status`)).json();
+    setVideoProgress(st.fortschritt, `${t('video.stage.' + st.schritt)} – ${Math.round(st.fortschritt * 100)} %`);
+    if (st.fertig) {
+      const name = v.name;
+      endVideo();
+      if (st.fehler) { if (st.fehler.code !== 'photo_cancelled') toast(t('toast.video') + ': ' + messageText(st.fehler)); return; }
+      await useScan({id: v.id, name, dreiecke: st.dreiecke}, true);
+      toast(t('video.done'));
+      return;
+    }
+  } catch { /* kurz nicht erreichbar: weiter versuchen */ }
+  if (state.video) state.video.timer = setTimeout(pollVideo, 2000);
+}
+$('video-cancel').onclick = async () => {
+  if (!state.video) return;
+  try { await api(`/api/kopfscan/${state.video.id}/abbrechen`, {method: 'POST'}); } catch {}
+};
 
 /* ---------------- 3 Zonen ---------------- */
 const dirAzEl = (az, el) => new THREE.Vector3(Math.cos(el * D2R) * Math.sin(az * D2R), Math.cos(el * D2R) * Math.cos(az * D2R), Math.sin(el * D2R));
@@ -608,6 +857,7 @@ function applyPreset(k) {
 }
 
 function drawHead() {
+  if (usesScan() && state.scanView && state.scan?.geo) { drawKopfView(); return; }  // gerade wird am Scan markiert
   clear(groups.kopf);
   if (!state.head) return;
   const geo = loader.parse(b64ToBuf(state.head.stl)); geo.computeVertexNormals();
@@ -720,7 +970,7 @@ function updateSummaries() {
 }
 
 function updateRunHint() {
-  const ready = !!state.helm && !!num('umfang') && state.zones.length > 0;
+  const ready = !!state.helm && !!num('umfang') && state.zones.length > 0 && (!usesScan() || scanComplete());
   $('run').disabled = !ready || state.running;
   $('run').textContent = state.result ? t('run.again') : t('run.btn');
   updateSummaries();
@@ -737,6 +987,7 @@ function missingSteps() {
   const list = [];
   if (!state.helm) list.push({tab: 'step-helm', msg: 'run.need.helm'});
   if (!num('umfang')) list.push({tab: 'step-kopf', msg: 'run.need.umfang', focus: 'umfang'});
+  else if (usesScan() && !scanComplete()) list.push({tab: 'step-kopf', msg: state.scan?.geo ? 'run.need.scan' : 'run.need.scanfile'});
   if (!state.zones.length) list.push({tab: 'step-zonen', msg: 'run.need.zone'});
   return list;
 }
@@ -773,6 +1024,7 @@ $('run').onclick = async () => {
     luefter: $('acc-luefter').checked ? +$('acc-luefter-s').value : null,
     mikrofon: $('acc-mikro').checked ? (num('acc-mikro-d') ?? 6) : null,
     muster: $('muster').checked, muster_staerke: +$('muster-staerke').value, papier: $('papier').value,
+    kopfscan: usesScan() && scanComplete() ? {id: state.scan.id, markierungen: state.scan.marks} : null,
   };
   busy(true, t('run.busy'));
   try {
@@ -1015,6 +1267,7 @@ function showTab(id) {
   document.querySelectorAll('#panel > .step').forEach(s => s.classList.toggle('active', s.id === id));
   document.querySelectorAll('#steps button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
   if (id !== 'step-marks' && state.picking) startPick(null);
+  if (id !== 'step-kopf' && state.scanPicking) startScanPick(null);
   const tab = TABS.find(x => x.id === id);
   const v = tab.view === 'result' ? (state.result ? 'ergebnis' : null) : tab.view;
   if (v && v !== view) setView(v); else updateGizmo();
@@ -1083,7 +1336,7 @@ function renderTabTexts() {
 function updateSteps() {
   const done = {
     // Schritt 2 ist optional: erledigt, sobald besucht (auch ohne Punkte)
-    'step-helm': !!state.helmGeo, 'step-marks': true, 'step-kopf': !!num('umfang'),
+    'step-helm': !!state.helmGeo, 'step-marks': true, 'step-kopf': !!num('umfang') && (!usesScan() || scanComplete()),
     'step-zonen': state.zones.length > 0, 'step-params': !!state.result, 'step-split': !!state.result,
     'step-run': !!state.result && !state.dirty,
   };
@@ -1108,6 +1361,7 @@ function refreshTexts() {
     state.presets[state.preset].zonen.forEach((z, i) => { if (state.zones[i]) state.zones[i].name = zoneName(z.name); });
   }
   renderPresets(); renderZones(); renderMarks(); renderHelmInfo(); updateHelmLock(); renderOrient(); showAngles(); updateRunHint();
+  renderScanPanel();
   if (state.head) drawHead();
   if (state.helmGeo) drawHelm();
   if (state.picking) startPick(state.picking);
@@ -1145,7 +1399,8 @@ function applyInputs(values) {
 $('proj-save').onclick = () => {
   const data = {app: 'HelmPad', version: 1, gespeichert: new Date().toISOString(),
     helm: state.helm ? {name: state.helm.name, dreiecke: state.helm.dreiecke} : null,
-    rotation: rotationRows(), markierungen: state.marks, zonen: state.zones, vorlage: state.preset, eingaben: collectInputs()};
+    rotation: rotationRows(), markierungen: state.marks, zonen: state.zones, vorlage: state.preset, eingaben: collectInputs(),
+    kopf: {modus: state.headMode, scan: state.scan ? {id: state.scan.id, name: state.scan.name, markierungen: state.scan.marks} : null}};
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}));
   a.download = `helmpad_${(state.helm?.name || 'projekt').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_')}.json`;
@@ -1167,6 +1422,8 @@ $('proj-file').onchange = async e => {
                             einheit: data.eingaben?.einheit};
     if (state.helm && data.helm && state.helm.name === data.helm.name) applyPendingProject();
     else if (data.helm) toast(t('project.need_helm', {name: data.helm.name}));
+    if (data.kopf?.scan) await restoreScan(data.kopf.scan);
+    setHeadMode(data.kopf?.modus || 'masse');
     loadHead(); markDirty();
   } catch (err) { toast(t('project.invalid') + ' ' + err.message); }
 };
@@ -1211,5 +1468,6 @@ updateHelmLock();
 setView('helm');
 showTab('step-helm');
 setupDonate();
+setHeadMode('masse');
 loadPresets().then(loadHead).catch(e => toast(e.message));
 markDirty();

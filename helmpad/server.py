@@ -22,7 +22,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import photogrammetry as photo
 from .head import HeadMeasurements, build_head
+from .headscan import ScanError, head_from_scan, load_scan
 from .helmet import AXES
 from .messages import msg
 from .orient import detect_orientation
@@ -35,9 +37,13 @@ from .zones import PRESETS, Zone, safe_names
 
 WEB = Path(__file__).parent / "web"
 DATA = Path(__file__).resolve().parent.parent / "arbeitsdaten"
-UPLOADS, JOBS = DATA / "helme", DATA / "ergebnisse"
+UPLOADS, JOBS, SCANS = DATA / "helme", DATA / "ergebnisse", DATA / "koepfe"
 ALLOWED_EXT = {".stl", ".obj", ".ply", ".3mf", ".off", ".glb"}
 MAX_UPLOAD_MB = 300
+SCAN_EXT = {".stl", ".obj", ".ply", ".glb", ".off", ".3mf"}
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
+MAX_VIDEO_MB = 2000
+SCAN_WORK_FACES = 400_000  # Kopfberechnung auf vereinfachtem Scan: schnell genug, Details reichen locker
 PREVIEW_FACES = 150_000
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 LANDMARKS = {"augen", "scheitel", "kinn", "ohr_links", "ohr_rechts"}
@@ -49,6 +55,8 @@ KEEP_RESULTS, RESULT_MAX_AGE_H, UPLOAD_MAX_AGE_D = 10, 12, 14
 app = FastAPI(title="HelmPad")
 # Eine Berechnung braucht alle CPU-Kerne – weitere Anfragen warten, statt den Rechner zu überlasten
 COMPUTE_LOCK = threading.Lock()
+# Video-Rekonstruktionen (id -> photogrammetry.Job); immer nur eine gleichzeitig
+PHOTO_JOBS: dict = {}
 
 
 def fail(status, code, text, **args):
@@ -101,10 +109,16 @@ def cleanup():
         for p in jobs[KEEP_RESULTS:]:
             if now - p.stat().st_mtime > RESULT_MAX_AGE_H * 3600:
                 shutil.rmtree(p, ignore_errors=True)
-    if UPLOADS.exists():
-        for p in UPLOADS.iterdir():
+    for root in (UPLOADS, SCANS):
+        if not root.exists():
+            continue
+        for p in root.iterdir():
+            job = PHOTO_JOBS.get(p.name)
+            if job and not job.done:
+                continue
             if p.is_dir() and now - p.stat().st_mtime > UPLOAD_MAX_AGE_D * 86400:
                 shutil.rmtree(p, ignore_errors=True)
+                PHOTO_JOBS.pop(p.name, None)
 
 
 @app.post("/api/helm")
@@ -155,6 +169,145 @@ def upload_helmet(datei: UploadFile = File(...)):
     }
 
 
+def _save_upload(datei: UploadFile, path: Path, max_mb: int):
+    size, limit = 0, max_mb * 1024 * 1024
+    with path.open("wb") as f:
+        while chunk := datei.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > limit:
+                raise OverflowError
+            f.write(chunk)
+
+
+def _prepare_scan(folder: Path, mesh):
+    """Vereinfachte Arbeitskopie und Vorschau eines Kopfscans ablegen."""
+    work = mesh.simplify_quadric_decimation(face_count=SCAN_WORK_FACES) if len(mesh.faces) > SCAN_WORK_FACES else mesh
+    work.export(folder / "arbeit.ply")
+    view = work.simplify_quadric_decimation(face_count=PREVIEW_FACES) if len(work.faces) > PREVIEW_FACES else work
+    view.export(folder / "vorschau.stl")
+    (folder / "dreiecke.txt").write_text(str(len(mesh.faces)))
+    return len(mesh.faces)
+
+
+@app.post("/api/kopfscan")
+def upload_head_scan(datei: UploadFile = File(...)):
+    ext = Path(datei.filename or "").suffix.lower()
+    if ext not in SCAN_EXT:
+        allowed = ", ".join(sorted(SCAN_EXT))
+        fail(400, "file_type", f"Dateityp {ext or '?'} wird nicht unterstützt (erlaubt: {allowed})", ext=ext or "?", allowed=allowed)
+    cleanup()
+    sid = uuid.uuid4().hex
+    folder = SCANS / sid
+    folder.mkdir(parents=True)
+    path = folder / f"scan{ext}"
+    try:
+        _save_upload(datei, path, MAX_UPLOAD_MB)
+        faces = _prepare_scan(folder, load_scan(path))
+    except OverflowError:
+        shutil.rmtree(folder, ignore_errors=True)
+        fail(413, "file_too_big", f"Die Datei ist größer als {MAX_UPLOAD_MB} MB.", mb=MAX_UPLOAD_MB)
+    except ScanError as e:
+        shutil.rmtree(folder, ignore_errors=True)
+        fail(400, e.code, str(e), **e.args_)
+    except Exception as e:
+        shutil.rmtree(folder, ignore_errors=True)
+        fail(400, "file_read", f"Datei konnte nicht gelesen werden: {e}", detail=str(e))
+    return {"id": sid, "name": datei.filename, "dreiecke": faces}
+
+
+def _photo_worker(sid: str, job):
+    job.run()
+    if job.result is not None:
+        try:
+            _prepare_scan(SCANS / sid, load_scan(job.result))
+            # Einzelbilder und dichte Daten sind groß und werden nicht mehr gebraucht
+            for d in ("bilder", "dense"):
+                shutil.rmtree(job.work / d, ignore_errors=True)
+        except Exception as e:
+            job.error = {"code": "photo_internal", "args": {"detail": str(e)}, "text": f"Kopfmodell unbrauchbar: {e}"}
+
+
+@app.get("/api/kopfvideo/bereit")
+def photo_ready():
+    missing = photo.missing_tools()
+    return {"bereit": not missing, "fehlt": missing}
+
+
+@app.post("/api/kopfvideo")
+def upload_head_video(datei: UploadFile = File(...)):
+    ext = Path(datei.filename or "").suffix.lower()
+    if ext not in VIDEO_EXT:
+        allowed = ", ".join(sorted(VIDEO_EXT))
+        fail(400, "file_type", f"Dateityp {ext or '?'} wird nicht unterstützt (erlaubt: {allowed})", ext=ext or "?", allowed=allowed)
+    missing = photo.missing_tools()
+    if missing:
+        fail(400, "photo_tools", "Photogrammetrie-Programme fehlen: " + ", ".join(missing), tools=", ".join(missing))
+    if any(not j.done for j in PHOTO_JOBS.values()):
+        fail(409, "photo_busy", "Es läuft bereits eine Video-Auswertung – bitte warten oder abbrechen.")
+    cleanup()
+    sid = uuid.uuid4().hex
+    folder = SCANS / sid
+    folder.mkdir(parents=True)
+    path = folder / f"video{ext}"
+    try:
+        _save_upload(datei, path, MAX_VIDEO_MB)
+    except OverflowError:
+        shutil.rmtree(folder, ignore_errors=True)
+        fail(413, "file_too_big", f"Die Datei ist größer als {MAX_VIDEO_MB} MB.", mb=MAX_VIDEO_MB)
+    (folder / "arbeit_video").mkdir()
+    job = photo.Job(path, folder / "arbeit_video")
+    PHOTO_JOBS[sid] = job
+    threading.Thread(target=_photo_worker, args=(sid, job), daemon=True).start()
+    return {"id": sid, "name": datei.filename}
+
+
+@app.get("/api/kopfscan/{sid}/status")
+def head_scan_status(sid: str):
+    folder = SCANS / _check_id(sid)
+    job = PHOTO_JOBS.get(sid)
+    ready = (folder / "vorschau.stl").exists()
+    if job is None:
+        if not ready:
+            fail(404, "scan_missing", "Kopfmodell nicht gefunden")
+        faces = folder / "dreiecke.txt"
+        return {"schritt": "done", "fortschritt": 1.0, "fertig": True, "fehler": None, "bereit": True,
+                "dreiecke": int(faces.read_text()) if faces.exists() else None}
+    st = job.status()
+    if job.error and not st["fehler"]:
+        st["fehler"] = job.error
+    st["bereit"] = ready and not st["fehler"]
+    st["fertig"] = st["fertig"] and (ready or bool(st["fehler"]))
+    if (folder / "dreiecke.txt").exists():
+        st["dreiecke"] = int((folder / "dreiecke.txt").read_text())
+    return st
+
+
+@app.post("/api/kopfscan/{sid}/abbrechen")
+def head_scan_cancel(sid: str):
+    job = PHOTO_JOBS.get(_check_id(sid))
+    if job:
+        job.cancel()
+    return {"ok": True}
+
+
+@app.get("/api/kopfscan/{sid}/vorschau.stl")
+def head_scan_preview(sid: str):
+    path = SCANS / _check_id(sid) / "vorschau.stl"
+    if not path.exists():
+        fail(404, "scan_missing", "Kopfmodell nicht gefunden")
+    return FileResponse(path, media_type="model/stl")
+
+
+def _scan_head(sid: str, marks: dict, circumference: float, subdivisions: int):
+    path = SCANS / _check_id(sid) / "arbeit.ply"
+    if not path.exists():
+        fail(404, "scan_missing", "Kopfmodell nicht gefunden – bitte neu laden")
+    try:
+        return head_from_scan(load_scan(path), marks, circumference, subdivisions=subdivisions)
+    except ScanError as e:
+        fail(400, e.code, str(e), **e.args_)
+
+
 @app.get("/api/helm/{hid}/vorschau.stl")
 def helmet_preview(hid: str):
     path = UPLOADS / _check_id(hid) / "vorschau.stl"
@@ -169,6 +322,7 @@ class Strict(BaseModel):
 
 
 Mm = Field(default=None, gt=0, le=1000)
+Vec3 = tuple[float, float, float]
 
 
 class Measurements(Strict):
@@ -204,6 +358,23 @@ def head_preview(m: Measurements):
     }
 
 
+class ScanRef(Strict):
+    id: str
+    markierungen: dict[str, Vec3]
+
+
+class ScanHeadRequest(ScanRef):
+    umfang: float = Field(gt=0, le=2000)
+
+
+@app.post("/api/kopfscan/kopf")
+def head_scan_head(req: ScanHeadRequest):
+    if not 400 <= req.umfang <= 750:
+        fail(400, "umfang_range", "Kopfumfang bitte in mm angeben (üblich: 520–640)")
+    mesh, info, radial = _scan_head(req.id, req.markierungen, req.umfang, subdivisions=4)
+    return {"info": info, "stl": base64.b64encode(mesh.export(file_type="stl")).decode(), "radial": radial}
+
+
 @app.get("/api/vorlagen")
 def presets():
     return {k: {"titel": t, "zonen": [asdict(z) for z in zs]} for k, (t, zs) in PRESETS.items()}
@@ -225,7 +396,6 @@ class CutIn(Strict):
 
 
 Axis = Literal[tuple(AXES)]
-Vec3 = tuple[float, float, float]
 
 
 class ComputeRequest(Strict):
@@ -265,6 +435,7 @@ class ComputeRequest(Strict):
     muster: bool = False                                          # 2D-Schnittmuster für Schaumstoff
     muster_staerke: float = Field(default=6.0, ge=1, le=30)
     papier: Literal["A4", "Letter"] = "A4"
+    kopfscan: ScanRef | None = None                               # gescannter Kopf statt Modell aus Maßen
 
 
 @app.post("/api/berechnen")
@@ -278,6 +449,10 @@ def compute(req: ComputeRequest):
     names = safe_names(z.name for z in req.zonen)
     zones = [Zone(**{**z.model_dump(), "name": n}) for z, n in zip(req.zonen, names)]
     head = req.masse.to_head()
+    head_override = None
+    if req.kopfscan:
+        mesh, info, _ = _scan_head(req.kopfscan.id, req.kopfscan.markierungen, head.circumference, subdivisions=5)
+        head_override = (mesh, info)
 
     pp = PadParams(thickness=req.dicke, compression=req.kompression, mount_gap=req.klett,
                    channel_spacing=0.0 if req.kanaele < 8 else req.kanaele)  # engere Kanäle sind nicht druckbar
@@ -300,7 +475,8 @@ def compute(req: ComputeRequest):
                 test_piece=req.probestueck, mount=req.befestigung,
                 magnet=MagnetParams(diameter=req.magnet_d, height=req.magnet_h), glasses=req.brille,
                 accessories={"riemen": req.riemen, "luefter": req.luefter, "mikrofon": req.mikrofon},
-                pattern={"sheet": req.muster_staerke, "paper": req.papier} if req.muster else None)
+                pattern={"sheet": req.muster_staerke, "paper": req.papier} if req.muster else None,
+                head_override=head_override)
             for p in pads:  # Vorschau in Kopf-Koordinaten (die Druckdateien sind gedreht)
                 p.mesh.export(out / "polster" / f"{p.file_stem}.vorschau.stl")
         except HTTPException:
